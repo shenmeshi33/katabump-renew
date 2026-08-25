@@ -38,6 +38,9 @@ jobs:
 
   renew:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      actions: write
     concurrency:
       group: katabump-renew
       cancel-in-progress: false
@@ -116,3 +119,7 @@ jobs:
     #   with:
     #     path: proxy-cooldown.json
     #     key: katabump-proxy-cooldown-${{ github.run_id }}
+
+    - name: Keep workflow active
+      if: always()
+      uses: liskin/gh-workflow-keepalive@v1
