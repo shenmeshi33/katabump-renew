@@ -1,0 +1,112 @@
+name: Katabump Auto Renew
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    concurrency:
+      group: katabump-check-${{ github.ref }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Syntax and unit checks
+      run: npm run check
+
+    - name: Load runtime dependencies
+      run: node -e "require('axios'); require('playwright-extra'); require('puppeteer-extra-plugin-stealth')"
+
+  renew:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    concurrency:
+      group: katabump-renew
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y xvfb netcat-openbsd
+        npm ci
+        npx playwright install-deps chrome
+
+    - name: Restore proxy cooldown cache
+      uses: actions/cache/restore@v4
+      with:
+        path: proxy-cooldown.json
+        key: katabump-proxy-cooldown-${{ github.run_id }}
+        restore-keys: |
+          katabump-proxy-cooldown-
+
+    - name: Download proxy list
+      env:
+        WEBSHARE_PROXY_LIST_URL: ${{ secrets.WEBSHARE_PROXY_LIST_URL }}
+      run: |
+        if [ -n "$WEBSHARE_PROXY_LIST_URL" ]; then
+          echo "Downloading Webshare proxy list..."
+          curl -fsSL \
+            --retry 3 \
+            --retry-delay 3 \
+            --retry-all-errors \
+            --connect-timeout 15 \
+            --max-time 90 \
+            "${WEBSHARE_PROXY_LIST_URL}" \
+            -o proxies.txt
+          echo "Proxy list downloaded. Lines: $(wc -l < proxies.txt)"
+        else
+          echo "WEBSHARE_PROXY_LIST_URL is empty, running without Webshare proxy."
+        fi
+
+    - name: Syntax Check
+      run: npm run check
+
+    - name: Run proxy runner (with dynamic proxy coverage)
+      env:
+        USERS_JSON: ${{ secrets.USERS_JSON }}
+        TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+        TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      run: |
+        xvfb-run --auto-servernum --server-args="-screen 0 1280x720x24" node proxy_runner.js
+
+    - name: Upload Screenshots
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: screenshots
+        path: screenshots/
+
+    - name: Save proxy cooldown cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: proxy-cooldown.json
+        key: katabump-proxy-cooldown-${{ github.run_id }}
